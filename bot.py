@@ -58,7 +58,8 @@ def get_video_info(url):
     """Get video metadata using yt-dlp with extra flags to avoid login prompts."""
     cmd = [
         "yt-dlp",
-        "--extractor-args", "youtube:skip=webpage",  # avoid some checks
+        "--cookies", "cookies.txt",   # Add this line
+        "--extractor-args", "youtube:skip=webpage",
         "--no-check-certificates",
         "--dump-json",
         url
@@ -104,6 +105,7 @@ def get_video_info(url):
 def download_format(url, format_id, output_path):
     cmd = [
         "yt-dlp",
+        "--cookies", "cookies.txt",   # Add this line
         "--extractor-args", "youtube:skip=webpage",
         "--no-check-certificates",
         "-f", format_id,
