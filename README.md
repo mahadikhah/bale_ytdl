@@ -1,25 +1,24 @@
-# Bale YouTube Downloader Bot
+# Bale YouTube Bot – Interactive Quality Selection
 
-This bot runs on GitHub Actions, downloads YouTube videos, and sends them to users on Bale Messenger.
+This bot runs on GitHub Actions, fetches YouTube video info, and lets users choose quality via inline buttons.
 
 ## Features
-- No external API keys needed (uses `yt-dlp` directly).
-- Splits videos larger than 45 MB into smaller parts.
-- Persists message offset across runs (no duplicate replies).
-- Cleans up files automatically.
+- No external APIs – uses `yt-dlp` directly.
+- Shows video title, duration, and file sizes.
+- Buttons for each quality (video + audio).
+- Splits files >45MB into smaller parts.
+- Persists offset across runs (no duplicate replies).
 
 ## Setup
-1. Create a new bot on Bale via @BotFather and copy the token.
-2. Fork or create a repository with the files above.
-3. Add `BALE_BOT_TOKEN` as a secret in GitHub → Settings → Secrets and variables → Actions.
-4. Push to `main`. The workflow will run every minute.
+1. Create a bot on Bale via @BotFather, get token.
+2. Add repository secrets: `BALE_BOT_TOKEN`.
+3. Push to GitHub. Workflow runs every minute.
 
 ## Usage
-- Send `/start` to the bot.
-- Send any YouTube URL.
-- Wait for the video(s) to arrive.
+- Send `/start` then a YouTube URL.
+- Choose a quality from the buttons.
+- Bot downloads and sends the file (split if needed).
 
-## Limitations
-- Videos are split at 45 MB (Bale's effective limit).
-- Very long videos may take several minutes to download.
-- GitHub Actions free tier allows 2000 minutes/month – plenty for personal use.
+## Troubleshooting
+- If no formats appear, try a shorter video.
+- Cron runs on `main` branch only.
