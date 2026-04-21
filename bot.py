@@ -1,20 +1,20 @@
 import os
 import time
+import json
 import requests
 import subprocess
 import re
+from urllib.parse import quote
 
-# ========== CONFIGURATION ==========
 TOKEN = os.environ["BALE_BOT_TOKEN"]
 BASE_URL = f"https://tapi.bale.ai/bot{TOKEN}"
 OFFSET_FILE = "last_update_id.txt"
-MAX_FILE_SIZE = 45 * 1024 * 1024   # 45 MB (safe under Bale's limit)
 TEMP_DIR = "temp_videos"
-# ===================================
+MAX_FILE_SIZE = 45 * 1024 * 1024   # 45 MB
 
 def get_last_offset():
     if os.path.exists(OFFSET_FILE):
-        with open(OFFSET_FILE, "r") as f:
+        with open(OFFSET_FILE) as f:
             return int(f.read().strip())
     return 0
 
@@ -22,15 +22,15 @@ def save_offset(offset):
     with open(OFFSET_FILE, "w") as f:
         f.write(str(offset))
 
-def send_message(chat_id, text, parse_mode=None):
+def send_message(chat_id, text, reply_markup=None):
     url = f"{BASE_URL}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"Failed to send message: {e}")
+        print(f"Send message error: {e}")
 
 def send_document(chat_id, file_path):
     url = f"{BASE_URL}/sendDocument"
@@ -38,72 +38,99 @@ def send_document(chat_id, file_path):
         files = {"document": f}
         data = {"chat_id": chat_id}
         try:
-            resp = requests.post(url, data=data, files=files, timeout=60)
+            resp = requests.post(url, data=data, files=files, timeout=120)
             return resp.ok
         except Exception as e:
-            print(f"Failed to send document {file_path}: {e}")
+            print(f"Send document error: {e}")
             return False
 
-def download_youtube(url, output_path):
-    """
-    Download the best quality video that fits under MAX_FILE_SIZE.
-    If no single format fits, download the smallest available.
-    """
-    cmd = [
-        "yt-dlp",
-        "-f", f"best[filesize<{MAX_FILE_SIZE}]/best",
-        "--output", output_path,
-        url
-    ]
+def answer_callback(callback_id, text=None, show_alert=False):
+    url = f"{BASE_URL}/answerCallbackQuery"
+    payload = {"callback_query_id": callback_id}
+    if text:
+        payload["text"] = text
+        payload["show_alert"] = show_alert
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Answer callback error: {e}")
+
+def get_video_info(url):
+    """Get video metadata and available formats using yt-dlp."""
+    cmd = ["yt-dlp", "--dump-json", url]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception(f"yt-dlp error: {result.stderr}")
+        raise Exception(f"yt-dlp info error: {result.stderr}")
+    data = json.loads(result.stdout)
+    title = data.get("title", "Unknown")
+    duration = data.get("duration", 0)
+    # Build list of usable formats (video+audio, mp4, under 45MB)
+    formats = []
+    for f in data.get("formats", []):
+        if f.get("vcodec") != "none" and f.get("acodec") != "none" and f.get("ext") == "mp4":
+            size = f.get("filesize") or f.get("filesize_approx") or 0
+            if size < MAX_FILE_SIZE:
+                height = f.get("height") or 0
+                label = f"{height}p" if height else "Unknown"
+                formats.append({
+                    "format_id": f["format_id"],
+                    "label": f"{label} ({size//1024//1024} MB)",
+                    "size": size
+                })
+    # Add audio-only options (opus/m4a)
+    for f in data.get("formats", []):
+        if f.get("vcodec") == "none" and f.get("acodec") != "none":
+            size = f.get("filesize") or f.get("filesize_approx") or 0
+            if size < MAX_FILE_SIZE:
+                ext = f.get("ext", "audio")
+                label = f"Audio ({ext}, {size//1024//1024} MB)"
+                formats.append({
+                    "format_id": f["format_id"],
+                    "label": label,
+                    "size": size
+                })
+    # Sort by size (smaller first)
+    formats.sort(key=lambda x: x["size"])
+    return title, duration, formats
+
+def download_format(url, format_id, output_path):
+    cmd = ["yt-dlp", "-f", format_id, "-o", output_path, url]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise Exception(f"Download error: {result.stderr}")
     return output_path
 
-def split_video(input_path, chat_id):
-    """
-    Split video into chunks <= MAX_FILE_SIZE using ffmpeg (fast, no re-encode).
-    Sends each chunk and returns number of successfully sent chunks.
-    """
-    file_size = os.path.getsize(input_path)
+def split_and_send(chat_id, file_path, base_name):
+    """Split file into <=45MB chunks and send each."""
+    file_size = os.path.getsize(file_path)
     if file_size <= MAX_FILE_SIZE:
-        # Single file, no split needed
-        return 1 if send_document(chat_id, input_path) else 0
-
-    # Create temp directory for chunks
+        return send_document(chat_id, file_path)
+    # Use ffmpeg to split without re-encoding
     os.makedirs(TEMP_DIR, exist_ok=True)
-
-    base_name = os.path.splitext(os.path.basename(input_path))[0]
-    ext = os.path.splitext(input_path)[1]
-    chunk_pattern = os.path.join(TEMP_DIR, f"{base_name}_part_%03d{ext}")
-
-    # Use ffmpeg to split by file size without re-encoding
+    ext = os.path.splitext(file_path)[1]
+    pattern = os.path.join(TEMP_DIR, f"{base_name}_part_%03d{ext}")
     cmd = [
-        "ffmpeg", "-i", input_path,
-        "-c", "copy",
-        "-map", "0",
+        "ffmpeg", "-i", file_path,
+        "-c", "copy", "-map", "0",
         "-f", "segment",
-        "-segment_time", "999999",     # effectively disable time-based split
+        "-segment_time", "999999",
         "-reset_timestamps", "1",
         "-fs", str(MAX_FILE_SIZE),
-        chunk_pattern
+        pattern
     ]
     subprocess.run(cmd, check=True, capture_output=True)
-
-    # Send each chunk
     sent = 0
-    part_num = 1
+    part = 1
     while True:
-        chunk_path = os.path.join(TEMP_DIR, f"{base_name}_part_{part_num:03d}{ext}")
-        if not os.path.exists(chunk_path):
+        chunk = os.path.join(TEMP_DIR, f"{base_name}_part_{part:03d}{ext}")
+        if not os.path.exists(chunk):
             break
-        if send_document(chat_id, chunk_path):
+        if send_document(chat_id, chunk):
             sent += 1
-        os.remove(chunk_path)          # delete after sending
-        time.sleep(0.5)                # avoid hitting rate limits
-        part_num += 1
-
-    return sent
+        os.remove(chunk)
+        part += 1
+        time.sleep(0.5)
+    return sent > 0
 
 def extract_youtube_id(text):
     patterns = [
@@ -111,22 +138,19 @@ def extract_youtube_id(text):
         r'youtube\.com\/embed\/([a-zA-Z0-9_-]{11})'
     ]
     for p in patterns:
-        match = re.search(p, text)
-        if match:
-            return match.group(1)
+        m = re.search(p, text)
+        if m:
+            return m.group(1)
     return None
 
 def cleanup():
-    """Remove temporary directory and all its contents."""
     if os.path.exists(TEMP_DIR):
         for f in os.listdir(TEMP_DIR):
             os.remove(os.path.join(TEMP_DIR, f))
         os.rmdir(TEMP_DIR)
 
 def main():
-    # Ensure temp directory exists at start
     os.makedirs(TEMP_DIR, exist_ok=True)
-
     offset = get_last_offset()
     print(f"Starting with offset {offset}")
 
@@ -137,7 +161,7 @@ def main():
             resp = requests.get(url, params=params, timeout=35)
             data = resp.json()
         except Exception as e:
-            print(f"Error fetching updates: {e}")
+            print(f"Poll error: {e}")
             break
 
         if not data.get("ok"):
@@ -150,54 +174,89 @@ def main():
 
         for update in updates:
             offset = update["update_id"] + 1
+            # Handle callback queries (button clicks)
+            if "callback_query" in update:
+                cb = update["callback_query"]
+                cb_id = cb["id"]
+                cb_data = cb.get("data")
+                chat_id = cb["message"]["chat"]["id"]
+                # cb_data format: "VIDEO_URL|FORMAT_ID"
+                if "|" in cb_data:
+                    video_url, format_id = cb_data.split("|", 1)
+                    answer_callback(cb_id, text="⏳ Downloading, please wait...")
+                    send_message(chat_id, "⏳ Downloading your selected format...")
+                    try:
+                        # Generate unique filename
+                        video_id = extract_youtube_id(video_url) or "video"
+                        out_file = os.path.join(TEMP_DIR, f"{video_id}_{format_id}.mp4")
+                        download_format(video_url, format_id, out_file)
+                        send_message(chat_id, "📤 Sending file...")
+                        base = f"{video_id}_{format_id}"
+                        success = split_and_send(chat_id, out_file, base)
+                        if success:
+                            send_message(chat_id, "✅ Done!")
+                        else:
+                            send_message(chat_id, "❌ Failed to send file.")
+                        os.remove(out_file)
+                    except Exception as e:
+                        send_message(chat_id, f"⚠️ Error: {str(e)[:200]}")
+                        answer_callback(cb_id, text=f"Error: {str(e)[:100]}", show_alert=True)
+                    finally:
+                        cleanup()
+                else:
+                    answer_callback(cb_id, text="Invalid request", show_alert=True)
+                continue
+
+            # Handle regular messages
             message = update.get("message")
             if not message:
                 continue
-
             chat_id = message["chat"]["id"]
             text = message.get("text", "")
 
-            # Handle /start command
             if text.startswith("/start"):
                 send_message(chat_id,
                     "🎬 *YouTube Downloader Bot*\n\n"
-                    "Send me a YouTube URL and I will download the video and send it back.\n"
-                    "If the video is larger than 45 MB, I will split it into multiple parts.\n\n"
+                    "Send me a YouTube URL. I'll fetch available qualities and let you choose.\n\n"
                     "Example: `https://youtu.be/dQw4w9WgXcQ`",
                     parse_mode="Markdown")
                 continue
 
-            # Extract YouTube ID
             video_id = extract_youtube_id(text)
             if not video_id:
-                send_message(chat_id, "❌ No valid YouTube URL found. Please send a link like `https://youtu.be/...` or `https://youtube.com/watch?v=...`")
+                send_message(chat_id, "❌ No valid YouTube URL found.")
                 continue
 
-            # Process the video
-            send_message(chat_id, "⏳ Downloading video... This may take a few minutes.")
+            # Get video info and build inline keyboard
+            send_message(chat_id, "🔍 Fetching video information...")
             try:
-                video_file = os.path.join(TEMP_DIR, f"{video_id}.mp4")
-                download_youtube(text, video_file)
+                title, duration, formats = get_video_info(text)
+                if not formats:
+                    send_message(chat_id, "❌ No downloadable formats found (all >45MB?). Try a shorter video.")
+                    continue
 
-                send_message(chat_id, "📤 Sending video (split if necessary)...")
-                sent_parts = split_video(video_file, chat_id)
+                # Build inline keyboard buttons
+                buttons = []
+                row = []
+                for f in formats[:8]:  # Max 8 buttons to avoid overflow
+                    callback_data = f"{text}|{f['format_id']}"
+                    row.append({"text": f["label"], "callback_data": callback_data})
+                    if len(row) == 2:   # Two buttons per row
+                        buttons.append(row)
+                        row = []
+                if row:
+                    buttons.append(row)
+                reply_markup = {"inline_keyboard": buttons}
 
-                if sent_parts == 0:
-                    send_message(chat_id, "❌ Failed to send any part. The video may be too large or Bale rejected it.")
-                else:
-                    send_message(chat_id, f"✅ Sent {sent_parts} part(s).")
-
-                # Remove the original downloaded file
-                if os.path.exists(video_file):
-                    os.remove(video_file)
+                duration_min = duration // 60
+                dur_str = f"{duration_min}:{duration%60:02d}" if duration else "unknown"
+                info_text = f"🎥 *{title}*\n⏱️ Duration: {dur_str}\n\nSelect quality:"
+                send_message(chat_id, info_text, reply_markup=reply_markup)
             except Exception as e:
-                send_message(chat_id, f"⚠️ Error: {str(e)[:200]}")
-            finally:
-                cleanup()
+                send_message(chat_id, f"⚠️ Failed to get info: {str(e)[:200]}")
 
-        # Save offset after processing all updates in this batch
         save_offset(offset)
-        time.sleep(1)   # small delay before next getUpdates
+        time.sleep(1)
 
 if __name__ == "__main__":
     main()
