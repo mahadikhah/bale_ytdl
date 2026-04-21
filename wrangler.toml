@@ -1,0 +1,8 @@
+name = "bale-youtube-bot"
+main = "src/index.js"
+compatibility_date = "2025-04-01"
+
+[vars]
+BALE_BOT_TOKEN = ""   # Will be set as secret
+GITHUB_TOKEN = ""     # Personal Access Token to trigger workflow
+GITHUB_REPO = "mahadikhah/bale_ytdl"   # Your repo for downloads
