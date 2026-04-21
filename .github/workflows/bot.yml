@@ -16,11 +16,13 @@ jobs:
           YOUTUBE_COOKIES_B64: ${{ secrets.YOUTUBE_COOKIES }}
         run: |
           echo "$YOUTUBE_COOKIES_B64" | base64 -d > cookies.txt
-            - name: Create empty offset file if not exists
-              run: |
-                if [ ! -f last_update_id.txt ]; then
-                  echo "0" > last_update_id.txt
-                fi
+
+          
+      - name: Create empty offset file if not exists
+        run: |
+            if [ ! -f last_update_id.txt ]; then
+              echo "0" > last_update_id.txt
+            fi
 
       - name: Download previous offset (optional)
         uses: actions/download-artifact@v4
