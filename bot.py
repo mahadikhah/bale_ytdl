@@ -218,8 +218,7 @@ def main():
                 send_message(chat_id,
                     "🎬 *YouTube Downloader Bot*\n\n"
                     "Send me a YouTube URL. I'll fetch available qualities and let you choose.\n\n"
-                    "Example: `https://youtu.be/dQw4w9WgXcQ`",
-                    parse_mode="Markdown")
+                    "Example: `https://youtu.be/dQw4w9WgXcQ`")
                 continue
 
             video_id = extract_youtube_id(text)
