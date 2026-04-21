@@ -1,0 +1,19 @@
+name: Download YouTube and Send to Bale
+
+on:
+  repository_dispatch:
+    types: [download-youtube]
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yt-dlp
+        run: pip install yt-dlp
+      - name: Download video and send
+        env:
+          BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          VIDEO_URL: ${{ github.event.client_payload.video_url }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
+        run: python send_video.py
