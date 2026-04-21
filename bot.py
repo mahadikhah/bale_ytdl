@@ -4,7 +4,6 @@ import json
 import requests
 import subprocess
 import re
-from urllib.parse import quote
 
 TOKEN = os.environ["BALE_BOT_TOKEN"]
 BASE_URL = f"https://tapi.bale.ai/bot{TOKEN}"
@@ -56,11 +55,20 @@ def answer_callback(callback_id, text=None, show_alert=False):
         print(f"Answer callback error: {e}")
 
 def get_video_info(url):
-    """Get video metadata and available formats using yt-dlp."""
-    cmd = ["yt-dlp", "--dump-json", url]
+    """Get video metadata using yt-dlp with extra flags to avoid login prompts."""
+    cmd = [
+        "yt-dlp",
+        "--extractor-args", "youtube:skip=webpage",  # avoid some checks
+        "--no-check-certificates",
+        "--dump-json",
+        url
+    ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception(f"yt-dlp info error: {result.stderr}")
+        stderr = result.stderr
+        if "Sign in to confirm" in stderr or "age-restricted" in stderr.lower():
+            raise Exception("This video is restricted (age‑gate or requires login). YouTube does not allow downloading it.")
+        raise Exception(f"yt-dlp info error: {stderr[:300]}")
     data = json.loads(result.stdout)
     title = data.get("title", "Unknown")
     duration = data.get("duration", 0)
@@ -94,10 +102,20 @@ def get_video_info(url):
     return title, duration, formats
 
 def download_format(url, format_id, output_path):
-    cmd = ["yt-dlp", "-f", format_id, "-o", output_path, url]
+    cmd = [
+        "yt-dlp",
+        "--extractor-args", "youtube:skip=webpage",
+        "--no-check-certificates",
+        "-f", format_id,
+        "-o", output_path,
+        url
+    ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise Exception(f"Download error: {result.stderr}")
+        stderr = result.stderr
+        if "Sign in to confirm" in stderr:
+            raise Exception("Cannot download this video – it requires login or is age‑restricted.")
+        raise Exception(f"Download error: {stderr[:200]}")
     return output_path
 
 def split_and_send(chat_id, file_path, base_name):
@@ -105,7 +123,6 @@ def split_and_send(chat_id, file_path, base_name):
     file_size = os.path.getsize(file_path)
     if file_size <= MAX_FILE_SIZE:
         return send_document(chat_id, file_path)
-    # Use ffmpeg to split without re-encoding
     os.makedirs(TEMP_DIR, exist_ok=True)
     ext = os.path.splitext(file_path)[1]
     pattern = os.path.join(TEMP_DIR, f"{base_name}_part_%03d{ext}")
@@ -174,19 +191,18 @@ def main():
 
         for update in updates:
             offset = update["update_id"] + 1
+
             # Handle callback queries (button clicks)
             if "callback_query" in update:
                 cb = update["callback_query"]
                 cb_id = cb["id"]
                 cb_data = cb.get("data")
                 chat_id = cb["message"]["chat"]["id"]
-                # cb_data format: "VIDEO_URL|FORMAT_ID"
                 if "|" in cb_data:
                     video_url, format_id = cb_data.split("|", 1)
                     answer_callback(cb_id, text="⏳ Downloading, please wait...")
                     send_message(chat_id, "⏳ Downloading your selected format...")
                     try:
-                        # Generate unique filename
                         video_id = extract_youtube_id(video_url) or "video"
                         out_file = os.path.join(TEMP_DIR, f"{video_id}_{format_id}.mp4")
                         download_format(video_url, format_id, out_file)
@@ -199,8 +215,8 @@ def main():
                             send_message(chat_id, "❌ Failed to send file.")
                         os.remove(out_file)
                     except Exception as e:
-                        send_message(chat_id, f"⚠️ Error: {str(e)[:200]}")
-                        answer_callback(cb_id, text=f"Error: {str(e)[:100]}", show_alert=True)
+                        send_message(chat_id, f"⚠️ {str(e)}")
+                        answer_callback(cb_id, text=str(e)[:100], show_alert=True)
                     finally:
                         cleanup()
                 else:
@@ -218,7 +234,8 @@ def main():
                 send_message(chat_id,
                     "🎬 *YouTube Downloader Bot*\n\n"
                     "Send me a YouTube URL. I'll fetch available qualities and let you choose.\n\n"
-                    "Example: `https://youtu.be/dQw4w9WgXcQ`")
+                    "Example: `https://youtu.be/dQw4w9WgXcQ`\n\n"
+                    "⚠️ *Note*: Some videos (age‑restricted or requiring login) cannot be downloaded.")
                 continue
 
             video_id = extract_youtube_id(text)
@@ -231,16 +248,16 @@ def main():
             try:
                 title, duration, formats = get_video_info(text)
                 if not formats:
-                    send_message(chat_id, "❌ No downloadable formats found (all >45MB?). Try a shorter video.")
+                    send_message(chat_id, "❌ No downloadable formats found (all >45MB or restricted). Try a shorter video.")
                     continue
 
                 # Build inline keyboard buttons
                 buttons = []
                 row = []
-                for f in formats[:8]:  # Max 8 buttons to avoid overflow
+                for f in formats[:8]:
                     callback_data = f"{text}|{f['format_id']}"
                     row.append({"text": f["label"], "callback_data": callback_data})
-                    if len(row) == 2:   # Two buttons per row
+                    if len(row) == 2:
                         buttons.append(row)
                         row = []
                 if row:
@@ -252,7 +269,7 @@ def main():
                 info_text = f"🎥 *{title}*\n⏱️ Duration: {dur_str}\n\nSelect quality:"
                 send_message(chat_id, info_text, reply_markup=reply_markup)
             except Exception as e:
-                send_message(chat_id, f"⚠️ Failed to get info: {str(e)[:200]}")
+                send_message(chat_id, f"⚠️ {str(e)}")
 
         save_offset(offset)
         time.sleep(1)
