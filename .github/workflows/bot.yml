@@ -2,35 +2,39 @@ name: Bale YouTube Bot
 
 on:
   schedule:
-    - cron: '*/1 * * * *'   # Every minute
-  workflow_dispatch:         # Manual trigger from GitHub UI
+    - cron: '*/1 * * * *'
+  workflow_dispatch:
 
 jobs:
   poll-and-download:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download previous offset file (if exists)
+      - name: Create empty offset file if not exists
+        run: |
+          if [ ! -f last_update_id.txt ]; then
+            echo "0" > last_update_id.txt
+          fi
+
+      - name: Download previous offset (optional)
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
           name: bot-state
           path: ./
 
-      - name: Install yt-dlp
-        run: pip install yt-dlp requests
-
-      - name: Install ffmpeg (for splitting videos)
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install dependencies
+        run: |
+          pip install yt-dlp requests
+          sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Run bot
         env:
           BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
         run: python bot.py
 
-      - name: Upload new offset file for next run
+      - name: Upload offset for next run
         if: always()
         uses: actions/upload-artifact@v4
         with:
