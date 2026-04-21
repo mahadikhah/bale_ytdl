@@ -15,20 +15,32 @@ def send_document(file_path):
     url = f"{BASE_URL}/sendDocument"
     with open(file_path, "rb") as f:
         files = {"document": f}
-        requests.post(url, data={"chat_id": CHAT_ID}, files=files)
+        data = {"chat_id": CHAT_ID}
+        resp = requests.post(url, data=data, files=files)
+        return resp.ok
 
 def main():
-    send_message("📥 Downloading video... This may take a few minutes.")
+    send_message("📥 Downloading video (this may take a few minutes)...")
     output = "video.mp4"
-    cmd = ["yt-dlp", "-f", "best[filesize<45M]/best", "-o", output, VIDEO_URL]
-    result = subprocess.run(cmd, capture_output=True)
+    # Try to stay under 50 MB (Bale limit)
+    cmd = ["yt-dlp", "-f", "best[filesize<50M]/best", "-o", output, VIDEO_URL]
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        send_message(f"Download failed: {result.stderr.decode()[:200]}")
+        send_message(f"❌ Download failed: {result.stderr[:200]}")
         return
+
+    file_size = os.path.getsize(output)
+    if file_size > 50 * 1024 * 1024:
+        send_message("⚠️ Video exceeds 50 MB and cannot be sent. Try a shorter video or lower quality.")
+        os.remove(output)
+        return
+
     send_message("📤 Sending video...")
-    send_document(output)
+    if send_document(output):
+        send_message("✅ Done!")
+    else:
+        send_message("❌ Failed to send the video (maybe too large or Bale error).")
     os.remove(output)
-    send_message("✅ Done!")
 
 if __name__ == "__main__":
     main()
