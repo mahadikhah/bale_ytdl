@@ -59,6 +59,7 @@ def get_video_info(url):
     cmd = [
         "yt-dlp",
         "--cookies", "cookies.txt",   # Add this line
+        "--remote-components", "ejs:github",   # <-- Add this line
         "--extractor-args", "youtube:skip=webpage",
         "--no-check-certificates",
         "--dump-json",
@@ -106,6 +107,7 @@ def download_format(url, format_id, output_path):
     cmd = [
         "yt-dlp",
         "--cookies", "cookies.txt",   # Add this line
+        "--remote-components", "ejs:github",   # <-- Add this line
         "--extractor-args", "youtube:skip=webpage",
         "--no-check-certificates",
         "-f", format_id,
