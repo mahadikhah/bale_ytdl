@@ -1,0 +1,27 @@
+name: Deploy Cloudflare Worker
+
+on:
+  push:
+    paths:
+      - 'cloudflare-worker/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Wrangler
+        run: npm install -g wrangler
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT_FOR_DISPATCH }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          wrangler secret put BALE_BOT_TOKEN --env production <<< "$BALE_BOT_TOKEN"
+          wrangler secret put GITHUB_TOKEN --env production <<< "$GITHUB_TOKEN"
+          wrangler secret put GITHUB_REPO --env production <<< "$GITHUB_REPO"
+          wrangler deploy --env production
